@@ -1,0 +1,88 @@
+#!/usr/bin/env ruby
+require 'rubygems'
+require 'highline/import'
+require 'socket'
+
+@options = { socket_name: "/tmp/memory-echo" }
+OptionParser.new do |opts|
+  opts.banner = "Usage: memory-echo [-p] [-o] [-s SOCKET]"
+
+  opts.on("-o", "Always print, even if we start the server.") do
+    @options[:print] = true
+  end
+
+  opts.on("-s", "Socket name, default: /tmp/memory-echo") do |name|
+    @options[:socket_name] = name
+  end
+
+  opts.on("-k", "Kill server, if it's running.") do
+    @options[:kill] = true
+  end
+end.parse!
+
+def prompt?
+  !server_running?
+end
+
+def server_running?
+  File.exist?(@options[:socket_name])
+end
+
+def serve?
+  !server_running? && !kill?
+end
+
+def print?
+  !@started_server || @options[:print] && !kill?
+end
+
+def fetch?
+  !kill?
+end
+
+def kill?
+  @options[:kill]
+end
+
+def fetch_payload
+  Socket.unix(@options[:socket_name]) do |io|
+    io.close_write
+    io.read
+  end
+end
+
+if prompt?
+  @payload = ask("Payload: ") {|q| q.echo = false }
+end
+
+if serve?
+  @started_server = true
+  fork do
+    Process.daemon
+    Socket.unix_server_loop(@options[:socket_name]) do |socket, client_addr|
+      begin
+        if socket.read == "KILL"
+          exit
+        end
+        socket.puts @payload
+      ensure
+        socket.close
+      end
+    end
+  end
+end
+
+if kill?
+  Socket.unix(@options[:socket_name]) do |io|
+    io.close_read
+    io.write "KILL"
+  end
+end
+
+if fetch?
+  @payload ||= fetch_payload
+end
+
+if print?
+  puts @payload
+end
